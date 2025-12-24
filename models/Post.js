@@ -1,15 +1,9 @@
-const postsCollection = require("../db")
-  .db()
-  .collection("posts");
 
-const followsCollection = require("../db")
-  .db()
-  .collection("follows");
-
-const ObjectID = require("mongodb").ObjectID;
+const postsCollection = require("../db").db().collection("posts");
+const followsCollection = require("../db").db().collection("follows");
+const { ObjectId } = require("mongodb");
 
 const User = require("./User");
-
 const sanitizeHTML = require("sanitize-html");
 
 let Post = function(data, userid, requestedPostId) {
@@ -26,8 +20,6 @@ Post.prototype.cleanUp = function() {
   if (typeof this.data.body != "string") {
     this.data.body = "";
   }
-  //get rid of any bogus properties
-
   this.data = {
     title: sanitizeHTML(this.data.title.trim(), {
       allowedTags: [],
@@ -38,7 +30,7 @@ Post.prototype.cleanUp = function() {
       allowedAttributes: {}
     }),
     createdDate: new Date(),
-    author: ObjectID(this.userid)
+    author: new ObjectId(this.userid)
   };
 };
 
@@ -56,11 +48,10 @@ Post.prototype.create = function() {
     this.cleanUp();
     this.validate();
     if (!this.errors.length) {
-      //save post into database
       postsCollection
         .insertOne(this.data)
         .then(info => {
-          resolve(info.ops[0]._id);
+          resolve(info.insertedId);
         })
         .catch(() => {
           this.errors.push("Please try again later.");
@@ -77,7 +68,6 @@ Post.prototype.update = function() {
     try {
       let post = await Post.findSingleById(this.requestedPostId, this.userid);
       if (post.isVisitorOwner) {
-        // actually update the db
         let status = await this.actuallyUpdate();
         resolve(status);
       } else {
@@ -95,7 +85,7 @@ Post.prototype.actuallyUpdate = function() {
     this.validate();
     if (!this.errors.length) {
       await postsCollection.findOneAndUpdate(
-        { _id: new ObjectID(this.requestedPostId) },
+        { _id: new ObjectId(this.requestedPostId) },
         { $set: { title: this.data.title, body: this.data.body } }
       );
       resolve("success");
@@ -117,26 +107,33 @@ Post.reusablePostQuery = function(uniqueOperations, visitorId) {
         }
       },
       {
+        $addFields: {
+          authorObject: { $arrayElemAt: ["$authorDocument", 0] }
+        }
+      },
+      {
         $project: {
           title: 1,
           body: 1,
           createdDate: 1,
           authorId: "$author",
-          author: { $arrayElemAt: ["$authorDocument", 0] }
+          author: {
+            username: "$authorObject.username",
+            avatar: "$authorObject.email"
+          }
         }
       }
     ]);
 
     let posts = await postsCollection.aggregate(aggOperations).toArray();
 
-    // clean up author property in each post object
     posts = posts.map(function(post) {
-      post.isVisitorOwner = post.authorId.equals(visitorId);
+      post.isVisitorOwner = visitorId && post.authorId && 
+        post.authorId.toString() === visitorId.toString();
 
-      post.author = {
-        username: post.author.username,
-        avatar: new User(post.author, true).avatar
-      };
+      if (post.author && post.author.avatar) {
+        post.author.avatar = `https://gravatar.com/avatar/${require('md5')(post.author.avatar)}?s=128`;
+      }
 
       return post;
     });
@@ -147,17 +144,16 @@ Post.reusablePostQuery = function(uniqueOperations, visitorId) {
 
 Post.findSingleById = function(id, visitorId) {
   return new Promise(async function(resolve, reject) {
-    if (typeof id != "string" || !ObjectID.isValid(id)) {
+    if (typeof id != "string" || !ObjectId.isValid(id)) {
       reject();
       return;
     }
     let posts = await Post.reusablePostQuery(
-      [{ $match: { _id: new ObjectID(id) } }],
-      visitorId
+      [{ $match: { _id: new ObjectId(id) } }],
+      visitorId ? visitorId.toString() : null
     );
 
     if (posts.length) {
-      console.log(posts[0]);
       resolve(posts[0]);
     } else {
       reject();
@@ -167,9 +163,9 @@ Post.findSingleById = function(id, visitorId) {
 
 Post.findByAuthorId = function(authorId) {
   return Post.reusablePostQuery([
-    { $match: { author: authorId } },
+    { $match: { author: new ObjectId(authorId) } },
     { $sort: { createdDate: -1 } }
-  ]);
+  ], null);
 };
 
 Post.delete = function(postIdToDelete, currentUserId) {
@@ -177,7 +173,7 @@ Post.delete = function(postIdToDelete, currentUserId) {
     try {
       let post = await Post.findSingleById(postIdToDelete, currentUserId);
       if (post.isVisitorOwner) {
-        await postsCollection.deleteOne({ _id: new ObjectID(postIdToDelete) });
+        await postsCollection.deleteOne({ _id: new ObjectId(postIdToDelete) });
         resolve();
       } else {
         reject();
@@ -194,7 +190,7 @@ Post.search = function(searchTerm) {
       let posts = await Post.reusablePostQuery([
         { $match: { $text: { $search: searchTerm } } },
         { $sort: { score: { $meta: "textScore" } } }
-      ]);
+      ], null);
       resolve(posts);
     } else {
       reject();
@@ -204,26 +200,24 @@ Post.search = function(searchTerm) {
 
 Post.countPostsByAuthor = function(id) {
   return new Promise(async (resolve, reject) => {
-    let postCount = await postsCollection.countDocuments({ author: id });
+    let postCount = await postsCollection.countDocuments({ author: new ObjectId(id) });
     resolve(postCount);
   });
 };
 
 Post.getFeed = async function(id) {
-  //create an array of the user ids that the current user follows
   let followedUsers = await followsCollection
-    .find({ authorId: new ObjectID(id) })
+    .find({ authorId: new ObjectId(id) })
     .toArray();
 
   followedUsers = followedUsers.map(followDoc => {
     return followDoc.followedId;
   });
 
-  //look for posts where the author is in the above array of followed users
   return Post.reusablePostQuery([
     { $match: { author: { $in: followedUsers } } },
     { $sort: { createdDate: -1 } }
-  ]);
+  ], id);
 };
 
 module.exports = Post;

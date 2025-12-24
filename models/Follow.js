@@ -1,11 +1,10 @@
-const usersCollection = require("../db")
-  .db()
-  .collection("users");
-const followsCollection = require("../db")
-  .db()
-  .collection("follows");
 
-const ObjectID = require("mongodb").ObjectID;
+
+const usersCollection = require("../db").db().collection("users");
+const followsCollection = require("../db").db().collection("follows");
+
+// ✅ FIXED: MongoDB v7 correct import
+const { ObjectId } = require("mongodb");
 
 const User = require("./User");
 
@@ -33,7 +32,7 @@ Follow.prototype.validate = async function(action) {
   }
   let doesFollowAlreadyExist = await followsCollection.findOne({
     followedId: this.followedId,
-    authorId: new ObjectID(this.authorId)
+    authorId: new ObjectId(this.authorId)  // ✅ FIXED
   });
 
   if (action == "create") {
@@ -47,7 +46,7 @@ Follow.prototype.validate = async function(action) {
     }
   }
   //should not be able to follow yourself
-  if (this.followedId.equals(this.authorId)) {
+  if (this.followedId.equals(new ObjectId(this.authorId))) {  // ✅ FIXED
     this.errors.push("You cannot follow yourself.");
   }
 };
@@ -59,7 +58,7 @@ Follow.prototype.create = function() {
     if (!this.errors.length) {
       await followsCollection.insertOne({
         followedId: this.followedId,
-        authorId: new ObjectID(this.authorId)
+        authorId: new ObjectId(this.authorId)  // ✅ FIXED
       });
       resolve();
     } else {
@@ -75,7 +74,7 @@ Follow.prototype.delete = function() {
     if (!this.errors.length) {
       await followsCollection.deleteOne({
         followedId: this.followedId,
-        authorId: new ObjectID(this.authorId)
+        authorId: new ObjectId(this.authorId)  // ✅ FIXED
       });
       resolve();
     } else {
@@ -87,7 +86,7 @@ Follow.prototype.delete = function() {
 Follow.isVisitorFollowing = async function(followedId, visitorId) {
   let followDoc = await followsCollection.findOne({
     followedId: followedId,
-    authorId: new ObjectID(visitorId)
+    authorId: new ObjectId(visitorId)  // ✅ FIXED (line 90)
   });
   if (followDoc) {
     return true;
@@ -101,7 +100,7 @@ Follow.getFollowersById = function(id) {
     try {
       let followers = await followsCollection
         .aggregate([
-          { $match: { followedId: id } },
+          { $match: { followedId: new ObjectId(id) } },  // ✅ FIXED
           {
             $lookup: {
               from: "users",
@@ -134,7 +133,7 @@ Follow.getFollowingById = function(id) {
     try {
       let followers = await followsCollection
         .aggregate([
-          { $match: { authorId: id } },
+          { $match: { authorId: new ObjectId(id) } },  // ✅ FIXED
           {
             $lookup: {
               from: "users",
@@ -165,7 +164,7 @@ Follow.getFollowingById = function(id) {
 Follow.countFollowersById = function(id) {
   return new Promise(async (resolve, reject) => {
     let followerCount = await followsCollection.countDocuments({
-      followedId: id
+      followedId: new ObjectId(id)  // ✅ FIXED
     });
     resolve(followerCount);
   });
@@ -173,7 +172,9 @@ Follow.countFollowersById = function(id) {
 
 Follow.countFollowingById = function(id) {
   return new Promise(async (resolve, reject) => {
-    let count = await followsCollection.countDocuments({ authorId: id });
+    let count = await followsCollection.countDocuments({ 
+      authorId: new ObjectId(id)  // ✅ FIXED
+    });
     resolve(count);
   });
 };
